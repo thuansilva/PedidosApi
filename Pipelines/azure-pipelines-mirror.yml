@@ -1,0 +1,92 @@
+# ============================================================
+#  PedidosApi — Mirror para GitHub
+#  Sincroniza automaticamente o Azure Repos com o GitHub
+#
+#  Pré-requisitos:
+#    1. Criar um Personal Access Token (PAT) no GitHub:
+#       github.com → Settings → Developer settings →
+#       Personal access tokens → Tokens (classic) → Generate new token
+#       Permissões: repo (todas)
+#       Copiar o token gerado
+#
+#    2. Adicionar o token como variável secreta no pipeline:
+#       Azure DevOps → Pipelines → Edit → Variables → + Add
+#       Nome : GITHUB_TOKEN
+#       Valor: [colar o token do GitHub]
+#       Keep this value secret: ON
+#
+#    3. Substituir "MaqBr" pelo seu usuário real do GitHub
+#       na variável githubUser abaixo
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - 'feat/*'
+      - 'fix/*'
+  tags:
+    include:
+      - 'v*.*.*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  githubUser: 'MaqBr'
+  githubRepo: 'PedidosApi'
+  # GITHUB_TOKEN é definido como Pipeline Variable secreta
+
+stages:
+
+- stage: Mirror
+  displayName: 'Mirror — Azure Repos → GitHub'
+  jobs:
+  - job: PushGitHub
+    displayName: 'Sincronizar com GitHub'
+    steps:
+
+    - checkout: self
+      displayName: '1. Checkout completo com histórico'
+      fetchDepth: 0       # ← obrigatório: baixa TODO o histórico
+      persistCredentials: true
+
+    - script: |
+        echo "================================================"
+        echo " Mirror: Azure Repos → GitHub"
+        echo " Branch/Tag : $(Build.SourceBranchName)"
+        echo " Commit     : $(Build.SourceVersion)"
+        echo "================================================"
+      displayName: '2. Informações do push'
+
+    - script: |
+        # Configurar identidade do git
+        git config user.email "devops@pedidosapi.com"
+        git config user.name  "Azure DevOps Mirror"
+
+        # Adicionar o remote do GitHub com autenticação via token
+        git remote add github \
+          https://$(githubUser):$(GITHUB_TOKEN)@github.com/$(githubUser)/$(githubRepo).git
+
+        # Verificar os remotes configurados
+        git remote -v
+      displayName: '3. Configurar remote GitHub'
+
+    - script: |
+        BRANCH="$(Build.SourceBranch)"
+
+        if [[ "$BRANCH" == refs/tags/* ]]; then
+          # É uma tag — fazer push da tag
+          TAG="${BRANCH#refs/tags/}"
+          echo "Fazendo push da tag: $TAG"
+          git push github "refs/tags/$TAG"
+
+        else
+          # É uma branch — fazer push da branch
+          BRANCH_NAME="${BRANCH#refs/heads/}"
+          echo "Fazendo push da branch: $BRANCH_NAME"
+          git push github "HEAD:refs/heads/$BRANCH_NAME"
+        fi
+
+        echo "Mirror concluído com sucesso!"
+      displayName: '4. Push para GitHub'
