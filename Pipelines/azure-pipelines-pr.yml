@@ -1,0 +1,65 @@
+# pipelines/azure-pipelines-pr.yml
+# ============================================================
+#  PedidosApi — Validação de Pull Request
+#  Roda automaticamente quando um PR é aberto para a main
+#  O merge só é liberado se build e testes passarem
+# ============================================================
+
+trigger: none   # nunca aciona por push direto
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - '**/*.md'        # ignora mudanças só em documentação
+      - 'pipelines/**'   # ignora mudanças só em pipelines
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '10.x'
+
+steps:
+
+- task: UseDotNet@2
+  displayName: '1. Instalar .NET SDK $(dotnetVersion)'
+  inputs:
+    version: '$(dotnetVersion)'
+    includePreviewVersions: true
+
+- task: DotNetCoreCLI@2
+  displayName: '2. Restaurar pacotes NuGet'
+  inputs:
+    command: restore
+    projects: '**/*.csproj'
+
+- task: DotNetCoreCLI@2
+  displayName: '3. Build'
+  inputs:
+    command: build
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfiguration) --no-restore'
+
+- task: DotNetCoreCLI@2
+  displayName: '4. Testes unitários'
+  inputs:
+    command: test
+    projects: '**/*Tests*.csproj'
+    arguments: >
+      --configuration $(buildConfiguration)
+      --no-build
+      --collect:"XPlat Code Coverage"
+    publishTestResults: true
+
+- script: |
+    echo "================================================"
+    echo " PR Validation concluído"
+    echo " PR     : $(System.PullRequest.PullRequestId)"
+    echo " Branch : $(System.PullRequest.SourceBranch)"
+    echo " Target : $(System.PullRequest.TargetBranch)"
+    echo "================================================"
+  displayName: '5. Resumo da validação'
