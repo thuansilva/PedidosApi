@@ -63,7 +63,7 @@ stages:
         if [[ "$BRANCH" == refs/tags/v* ]]; then
           VERSION="${BRANCH#refs/tags/v}"
           # Tag: versão limpa — todas as flags funcionam
-          ASSEMBLY_VERSION="$VERSION"
+          ASSEMBLY_VERSION=$(echo "$VERSION" | cut -d'-' -f1)
         else
           VERSION="0.0.0-$(Build.BuildNumber)"
           # Branch: só InformationalVersion aceita sufixo
