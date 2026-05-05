@@ -109,7 +109,7 @@ stages:
       displayName: '6. Publicar aplicação'
       inputs:
         command: publish
-        projects: '**/*.csproj'
+        projects: '**/PedidosApi.csproj'
         arguments: >
           --configuration $(buildConfiguration)
           --output $(Build.ArtifactStagingDirectory)
