@@ -84,6 +84,9 @@ stages:
           --configuration $(buildConfiguration)
           --no-restore
           -p:Version=$(appVersion)
+          -p:AssemblyVersion=$(appVersion)
+          -p:FileVersion=$(appVersion)
+          -p:InformationalVersion=$(appVersion)
 
     - task: DotNetCoreCLI@2
       displayName: '5. Testes unitários'
