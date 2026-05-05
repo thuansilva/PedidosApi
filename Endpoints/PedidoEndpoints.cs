@@ -1,5 +1,6 @@
 using Microsoft.FeatureManagement;
 using PedidosApi.Features;
+using System.Reflection;
 
 namespace PedidosApi.Endpoints;
 
