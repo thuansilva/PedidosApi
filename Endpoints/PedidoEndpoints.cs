@@ -55,6 +55,22 @@ public static class PedidoEndpoints
             .WithName("StatusFlags")
             .WithTags("Feature Flags")
             .WithSummary("Retorna o status atual de todas as feature flags");
+
+        app.MapGet("/info", (IWebHostEnvironment env) =>
+        {
+            var versao = typeof(Program).Assembly
+                            .GetName().Version?.ToString() ?? "0.0.0";
+            return Results.Ok(new
+            {
+                Ambiente    = env.EnvironmentName,
+                Versao      = versao,
+                Application = "PedidosApi",
+                Timestamp   = DateTime.UtcNow
+            });
+        })
+        .WithName("Info")
+        .WithTags("Sistema");
+       
     }
 }
 
