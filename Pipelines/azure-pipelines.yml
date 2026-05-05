@@ -92,6 +92,7 @@ stages:
           -p:AssemblyVersion=$(assemblyVersion)
           -p:FileVersion=$(assemblyVersion)
           -p:InformationalVersion=$(appVersion)
+          -p:IncludeSourceRevisionInInformationalVersion=false
 
     - task: DotNetCoreCLI@2
       displayName: '5. Testes unitários'
