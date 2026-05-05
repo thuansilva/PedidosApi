@@ -20,9 +20,12 @@ builder.Services.AddSwaggerGen(options =>
     // Lê o ambiente e a versão do assembly (injetada pelo pipeline)
     var ambiente = builder.Environment.EnvironmentName;
     // Depois — lê InformationalVersion (preserva 1.3.0, 1.3.0-beta.1, etc.)
-    var versao = typeof(Program).Assembly
+    var versaoCompleta = typeof(Program).Assembly
                     .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
                     ?.InformationalVersion ?? "0.0.0";
+                    
+    // Remove o hash do commit (+abc123...)
+    var versao = versaoCompleta.Split('+')[0];
 
     options.SwaggerDoc("v1", new()
     {
