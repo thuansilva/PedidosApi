@@ -88,9 +88,9 @@ stages:
         arguments: >
           --configuration $(buildConfiguration)
           --no-restore
-          -p:Version=$(appVersion)
-          -p:AssemblyVersion=$(appVersion)
-          -p:FileVersion=$(appVersion)
+          -p:Version=$(assemblyVersion)
+          -p:AssemblyVersion=$(assemblyVersion)
+          -p:FileVersion=$(assemblyVersion)
           -p:InformationalVersion=$(appVersion)
 
     - task: DotNetCoreCLI@2
