@@ -15,7 +15,7 @@ pr:
     exclude:
       - '**/*.md'        # ignora mudanças só em documentação
       - '*.md'
-      - 'pipelines/**'   # ignora mudanças só em pipelines
+      - 'Pipelines/**'   # ignora mudanças só em pipelines
 
 pool:
   vmImage: 'ubuntu-latest'
