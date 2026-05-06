@@ -80,7 +80,7 @@ stages:
         command: restore
         projects: '**/*.csproj'
 
-    # NOVO: Preparar análise do SonarCloud (antes do build)
+    # NOVO: Preparar análise do SonarCloud (antes do build) 
     - task: SonarCloudPrepare@4
       displayName: '4. Preparar análise SonarCloud'
       inputs:
