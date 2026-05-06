@@ -16,7 +16,7 @@ API de pedidos desenvolvida com **.NET 10 Minimal API** para demonstrar na prát
 - [Configuração por ambiente](#configuração-por-ambiente)
 - [Adaptando para JWT](#adaptando-para-jwt)
 - [Conceitos aplicados](#conceitos-aplicados)
-- [CHANGELOG](#changelog)
+- [CHANGELOG](#changelog) 
 
 
 ---
