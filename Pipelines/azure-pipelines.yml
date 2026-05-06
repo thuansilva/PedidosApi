@@ -93,7 +93,7 @@ stages:
           sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
           sonar.exclusions=**/obj/**,**/bin/**
     - task: DotNetCoreCLI@2
-      displayName: '4. Build'
+      displayName: '5. Build'
       inputs:
         command: build
         projects: '**/*.csproj'
@@ -107,7 +107,7 @@ stages:
           -p:IncludeSourceRevisionInInformationalVersion=false
 
     - task: DotNetCoreCLI@2
-      displayName: '5. Testes unitários'
+      displayName: '6. Testes unitários'
       inputs:
         command: test
         projects: '**/*Tests*.csproj'
@@ -128,7 +128,7 @@ stages:
         pollingTimeoutSec: '300'
 
     - task: DotNetCoreCLI@2
-      displayName: '6. Publicar aplicação'
+      displayName: '9. Publicar aplicação'
       inputs:
         command: publish
         projects: '**/PedidosApi.csproj'
@@ -138,7 +138,7 @@ stages:
         zipAfterPublish: true
 
     - task: PublishBuildArtifacts@1
-      displayName: '7. Salvar artefato'
+      displayName: '10. Salvar artefato'
       inputs:
         pathToPublish: '$(Build.ArtifactStagingDirectory)'
         artifactName: drop
