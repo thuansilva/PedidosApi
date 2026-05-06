@@ -2,7 +2,6 @@ using Microsoft.FeatureManagement;
 using Microsoft.FeatureManagement.FeatureFilters;
 using PedidosApi.Features;
 using PedidosApi.Endpoints;
-using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
