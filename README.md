@@ -64,7 +64,7 @@ A API sobe em `http://localhost:5000/swagger`.
 
 ```
 PedidosApi/
-├── Program.cs                        # Registro de serviços, filtros e pipeline HTTP
+├── Program.cs                        # Registro de serviços, filtros e pipeline HTTP 
 ├── PedidosApi.csproj                 # Definição do projeto e dependências NuGet
 ├── appsettings.json                  # Configuração de produção — flags desligadas por padrão
 ├── appsettings.Development.json      # Configuração de desenvolvimento — flags ligadas para devs
