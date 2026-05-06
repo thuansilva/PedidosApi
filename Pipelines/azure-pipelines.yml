@@ -126,6 +126,7 @@ stages:
       displayName: '8. Publicar resultados e verificar Quality Gate'
       inputs:
         pollingTimeoutSec: '300'
+      #continueOnError: true
 
     - task: DotNetCoreCLI@2
       displayName: '9. Publicar aplicação'
