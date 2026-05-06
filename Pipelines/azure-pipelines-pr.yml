@@ -12,10 +12,12 @@ pr:
     include:
       - main
   paths:
+    include:
+      - '**' # ← monitorar tudo
     exclude:
-      - '**/*.md'        # ignora mudanças só em documentação
       - '*.md'
-      - 'Pipelines/**'   # ignora mudanças só em pipelines
+      - '**/*.md'
+      - 'Pipelines/**'
 
 pool:
   vmImage: 'ubuntu-latest'
