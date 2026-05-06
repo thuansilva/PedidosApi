@@ -8,9 +8,6 @@ public static class PedidoEndpoints
 {
     public static void MapPedidoEndpoints(this WebApplication app)
     {
-        // -------------------------------------------------------
-        // Endpoint existente — não mudou nada com o TBD
-        // -------------------------------------------------------
         app.MapGet("/pedidos", () =>
             Results.Ok(new[]
             {
