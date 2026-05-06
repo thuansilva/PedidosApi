@@ -81,7 +81,7 @@ stages:
         projects: '**/*.csproj'
 
     # NOVO: Preparar análise do SonarCloud (antes do build)
-    - task: SonarCloudPrepare@1
+    - task: SonarCloudPrepare@4
       displayName: '4. Preparar análise SonarCloud'
       inputs:
         SonarCloud: 'sc-sonarcloud'
@@ -118,11 +118,11 @@ stages:
         publishTestResults: true
 
     # NOVO: Executar análise do SonarCloud (após os testes)
-    - task: SonarCloudAnalyze@1
+    - task: SonarCloudAnalyze@4
       displayName: '7. Executar análise SonarCloud'
     
     # NOVO: Publicar resultados e verificar Quality Gate
-    - task: SonarCloudPublish@1
+    - task: SonarCloudPublish@4
       displayName: '8. Publicar resultados e verificar Quality Gate'
       inputs:
         pollingTimeoutSec: '300'
