@@ -80,6 +80,18 @@ stages:
         command: restore
         projects: '**/*.csproj'
 
+    # NOVO: Preparar análise do SonarCloud (antes do build)
+    - task: SonarCloudPrepare@2
+      displayName: '4. Preparar análise SonarCloud'
+      inputs:
+        SonarCloud: 'sc-sonarcloud'
+        organization: 'maqbrdevops'
+        scannerMode: 'dotnet'
+        projectKey: 'maqbrdevops'
+        projectName: 'PedidosApi'
+        extraProperties: |
+          sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
+          sonar.exclusions=**/obj/**,**/bin/**
     - task: DotNetCoreCLI@2
       displayName: '4. Build'
       inputs:
@@ -104,6 +116,16 @@ stages:
           --no-build
           --collect:"XPlat Code Coverage"
         publishTestResults: true
+
+    # NOVO: Executar análise do SonarCloud (após os testes)
+    - task: SonarCloudAnalyze@2
+      displayName: '7. Executar análise SonarCloud'
+    
+    # NOVO: Publicar resultados e verificar Quality Gate
+    - task: SonarCloudPublish@2
+      displayName: '8. Publicar resultados e verificar Quality Gate'
+      inputs:
+        pollingTimeoutSec: '300'
 
     - task: DotNetCoreCLI@2
       displayName: '6. Publicar aplicação'
