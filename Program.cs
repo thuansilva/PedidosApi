@@ -42,7 +42,7 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
-// Swagger sempre visível (todos os ambientes)
+// Swagger sempre visível (todos os ambientes)-
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
