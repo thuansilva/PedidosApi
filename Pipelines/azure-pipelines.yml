@@ -181,7 +181,7 @@ stages:
           - script: |
               sleep 20
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_ALPHA)-f7fxa9b5a7fvdgdd.brazilsouth-01.azurewebsites.net)
+                https://$(APP_NAME_ALPHA)-f7fxa9b5a7fvdgdd.brazilsouth-01.azurewebsites.net/pedidos)
               echo "Smoke test Alpha: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK" || exit 1
             displayName: '3. Smoke test Alpha'
