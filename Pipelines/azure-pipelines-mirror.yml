@@ -33,7 +33,7 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  githubUser: 'MaqBr'
+  githubUser: 'thuansilva'
   githubRepo: 'PedidosApi'
   # GITHUB_TOKEN é definido como Pipeline Variable secreta
 
