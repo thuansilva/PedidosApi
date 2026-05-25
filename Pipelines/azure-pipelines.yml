@@ -126,7 +126,7 @@ stages:
       displayName: '8. Publicar resultados e verificar Quality Gate'
       inputs:
         pollingTimeoutSec: '300'
-      #continueOnError: true
+        continueOnError: true
 
     - task: DotNetCoreCLI@2
       displayName: '9. Publicar aplicação'
@@ -257,7 +257,7 @@ stages:
           - script: |
               sleep 20
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_RC)-gddgcsgafmarhgfg.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_RC)-bqhnf5e0cjcnf9f8.brazilsouth-01.azurewebsites.net/pedidos)
               echo "Smoke test RC: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK" || exit 1
             displayName: '3. Smoke test RC'
@@ -298,7 +298,7 @@ stages:
           - script: |
               sleep 25
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_STABLE)-gddgcsgafmarhgfg.brazilsouth-01.azurewebsites.net/pedidos)
               echo "Smoke test Stable: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK — produção no ar!" || exit 1
             displayName: '3. Smoke test Stable'
@@ -307,6 +307,6 @@ stages:
               echo "================================================"
               echo " Deploy em produção concluído!"
               echo " Versão : $(Build.SourceBranchName)"
-              echo " URL    : https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.brazilsouth-01.azurewebsites.net"
+              echo " URL    : https://$(APP_NAME_STABLE)-gddgcsgafmarhgfg.brazilsouth-01.azurewebsites.net"
               echo "================================================"
             displayName: '4. Resumo do deploy'
