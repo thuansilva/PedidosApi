@@ -1,0 +1,41 @@
+# ============================================================
+#  PedidosApi — Docker Compose — Ambiente: RC (Release Candidate)
+#
+#  Como o Azure Web App (Container) injeta a connection string:
+#    Portal → App Service → Configuração → Cadeias de conexão
+#      Tipo : SQLServer
+#      Nome : DefaultConnection
+#      Valor: Server=tcp:pedidos-sql-rc.database.windows.net,...
+#
+#  O Azure traduz automaticamente para a variável de ambiente:
+#    SQLCONNSTR_DefaultConnection=<valor>
+#
+#  O ASP.NET Core também aceita o formato hierárquico (usado aqui):
+#    ConnectionStrings__DefaultConnection=<valor>
+#
+#  Uso local:
+#    1. Copie Docker/.env.example → Docker/.env e preencha SQL_PASSWORD
+#    2. docker compose -f Docker/docker-compose.rc.yml up --build
+# ============================================================
+
+services:
+  pedidos-api-rc:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pedidosapi:rc
+    container_name: pedidos-api-rc
+    environment:
+      - ASPNETCORE_ENVIRONMENT=RC
+      - ASPNETCORE_URLS=http://+:8080
+
+      # Connection string ilustrativa — em produção é injetada pelo Azure
+      # via Configuração → Cadeias de conexão (SQLCONNSTR_DefaultConnection).
+      - ConnectionStrings__DefaultConnection=Server=tcp:pedidos-sql-rc.database.windows.net,1433;Initial Catalog=pedidos-db-rc;User ID=pedidos-user;Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+
+      - FeatureManagement__DescontoPremium=true
+      - FeatureManagement__DescontoProgressivo=false
+      - FeatureManagement__NovoCalculoFrete=false
+    ports:
+      - "5102:8080"
+    restart: unless-stopped

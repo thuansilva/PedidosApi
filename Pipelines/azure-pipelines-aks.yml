@@ -1,0 +1,548 @@
+# ============================================================
+#  PedidosApi — Pipeline CI/CD com Docker Hub + AKS — GitOps
+#  Alpha → Beta → RC → Stable
+#
+#  CI  : dotnet publish DENTRO do Docker (build multi-stage)
+#         imagem enviada ao Docker Hub com tag SemVer
+#  CD  : kubectl apply -f k8s/ → GitOps
+#         sed injeta os placeholders antes do apply:
+#           IMAGE_TAG     → versão SemVer ex: 1.2.0-alpha.1
+#           NAMESPACE_TAG → alpha | beta | rc | stable
+#           ENV_TAG       → Alpha | Beta | RC | Stable
+#
+#  Manifests aplicados em ordem (dependência):
+#    1. configmap.yaml   → variáveis de ambiente
+#    2. deployment.yaml  → pods (consome configmap)
+#    3. service.yaml     → LoadBalancer
+#    4. hpa.yaml         → autoscaling (consome deployment)
+#
+#  blue-green.yaml e canary.yaml NÃO são aplicados pela pipeline
+#  (estratégias avançadas aplicadas manualmente no stable)
+#
+#  Triggers por tag SemVer:
+#    v*.*.*-alpha.*  → CI + Deploy Alpha
+#    v*.*.*-beta.*   → CI + Deploy Beta
+#    v*.*.*-rc.*     → CI + Deploy RC  (aprovação: Tech Lead)
+#    v*.*.*          → CI + Deploy Stable (aprovação: Tech Lead + PM)
+#
+#  Pré-requisitos no Azure DevOps:
+#    Service connections:
+#      sc-dockerhub-pedidosapi → Docker Hub (tipo Docker Registry)
+#      sc-azure-pedidosapi     → Azure Resource Manager (para AKS)
+#    Environments:
+#      alpha, beta, rc, stable  (com aprovações configuradas em rc e stable)
+#    AKS:
+#      Cluster    : aks-pedidosapi-curso
+#      Namespaces : alpha, beta, rc, stable (criados previamente)
+#      Secrets    : dockerhub-secret e pedidosapi-secret em cada namespace
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - 'feat/*'
+      - 'fix/*'
+  tags:
+    include:
+      - 'v*.*.*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion:      '10.x'
+  DOCKERHUB_REPO:     'maqbrdevops/pedidosapi'
+  AKS_RESOURCE_GROUP: 'DefaultResourceGroup-CCAN'
+  AKS_CLUSTER:        'aks-pedidosapi-curso'
+  K8S_MANIFESTS_DIR:  'k8s'
+  K8S_DEPLOYMENT:     'pedidosapi'
+
+stages:
+
+# ── CI ────────────────────────────────────────────────────────
+- stage: CI
+  displayName: 'CI — Build, Test e Push Docker Hub'
+  jobs:
+  - job: BuildTestPush
+    displayName: 'Build, Test e Push para Docker Hub'
+    steps:
+
+    - checkout: self
+      fetchDepth: 0
+
+    - task: UseDotNet@2
+      displayName: '1. Instalar .NET SDK $(dotnetVersion)'
+      inputs:
+        version: '$(dotnetVersion)'
+        includePreviewVersions: true
+
+    - script: |
+        BRANCH="$(Build.SourceBranch)"
+        if [[ "$BRANCH" == refs/tags/v* ]]; then
+          VERSION="${BRANCH#refs/tags/v}"
+          ASSEMBLY_VERSION=$(echo "$VERSION" | cut -d'-' -f1)
+        else
+          VERSION="0.0.0-$(Build.BuildNumber)"
+          ASSEMBLY_VERSION="0.0.0"
+        fi
+
+        if [[ "$BRANCH" == refs/heads/main ]] || [[ "$VERSION" == *-alpha.* ]]; then
+          ENV_TAG="alpha"
+          ENV_NAME="Alpha"
+        elif [[ "$VERSION" == *-beta.* ]]; then
+          ENV_TAG="beta"
+          ENV_NAME="Beta"
+        elif [[ "$VERSION" == *-rc.* ]]; then
+          ENV_TAG="rc"
+          ENV_NAME="RC"
+        else
+          ENV_TAG="stable"
+          ENV_NAME="Stable"
+        fi
+
+        echo "##vso[task.setvariable variable=appVersion;isOutput=true]$VERSION"
+        echo "##vso[task.setvariable variable=assemblyVersion]$ASSEMBLY_VERSION"
+        echo "##vso[task.setvariable variable=envTag;isOutput=true]$ENV_TAG"
+        echo "##vso[task.setvariable variable=envName;isOutput=true]$ENV_NAME"
+        echo "Versão: $VERSION | Assembly: $ASSEMBLY_VERSION | Tag: $ENV_TAG | Env: $ENV_NAME"
+      name: versao
+      displayName: '2. Calcular versão SemVer e tag de ambiente'
+
+    - task: DotNetCoreCLI@2
+      displayName: '3. Restaurar pacotes NuGet'
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: '4. Build'
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-restore
+          -p:Version=$(assemblyVersion)
+          -p:AssemblyVersion=$(assemblyVersion)
+          -p:FileVersion=$(assemblyVersion)
+          -p:InformationalVersion=$(versao.appVersion)
+          -p:IncludeSourceRevisionInInformationalVersion=false
+
+    - task: DotNetCoreCLI@2
+      displayName: '5. Testes unitários com cobertura'
+      inputs:
+        command: test
+        projects: '**/*Tests*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-build
+          --collect:"XPlat Code Coverage"
+        publishTestResults: true
+
+    - task: Docker@2
+      displayName: '6. Build e Push da imagem para o Docker Hub'
+      inputs:
+        command: buildAndPush
+        containerRegistry: 'sc-dockerhub-pedidosapi'
+        repository: '$(DOCKERHUB_REPO)'
+        dockerfile: 'Dockerfile'
+        buildContext: '.'
+        tags: |
+          $(versao.appVersion)
+          $(versao.envTag)
+        arguments: >
+          --build-arg VERSION=$(versao.appVersion)
+          --build-arg ASSEMBLY_VERSION=$(assemblyVersion)
+
+    # Publica a pasta k8s/ como artefato do pipeline
+    # Os stages de deploy fazem download, substituem os placeholders e aplicam
+    # Apenas os 4 manifests do fluxo principal são publicados
+    # blue-green.yaml e canary.yaml são excluídos (uso manual no stable)
+    - task: PublishPipelineArtifact@1
+      displayName: '7. Publicar manifests k8s como artefato'
+      inputs:
+        targetPath: '$(K8S_MANIFESTS_DIR)'
+        artifact: 'k8s-manifests'
+        publishLocation: 'pipeline'
+
+# ── ALPHA ─────────────────────────────────────────────────────
+- stage: DeployAlpha
+  displayName: 'Alpha — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      or(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        contains(variables['Build.SourceBranch'], '-alpha.')
+      )
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployAlpha
+    displayName: 'Deploy Alpha → AKS namespace: alpha'
+    environment: 'alpha'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          # sed substitui os 3 placeholders antes do kubectl apply:
+          #   NAMESPACE_TAG → alpha   (namespace do cluster)
+          #   IMAGE_TAG     → versão  (tag da imagem no Docker Hub)
+          #   ENV_TAG       → Alpha   (ASPNETCORE_ENVIRONMENT no configmap)
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: alpha"
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Alpha|g"              $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"  $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"      $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (alpha)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace alpha..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n alpha
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n alpha --timeout=300s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Alpha'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n alpha \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Alpha: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Alpha OK" || exit 1
+
+# ── BETA ──────────────────────────────────────────────────────
+- stage: DeployBeta
+  displayName: 'Beta — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      contains(variables['Build.SourceBranch'], '-beta.')
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployBeta
+    displayName: 'Deploy Beta → AKS namespace: beta'
+    environment: 'beta'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: beta"
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Beta|g"               $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"  $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"      $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (beta)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace beta..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n beta
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n beta --timeout=300s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Beta'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n beta \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Beta: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Beta OK" || exit 1
+
+# ── RC ────────────────────────────────────────────────────────
+- stage: DeployRC
+  displayName: 'RC — Aprovação obrigatória'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      contains(variables['Build.SourceBranch'], '-rc.')
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployRC
+    displayName: 'Deploy RC → AKS namespace: rc'
+    environment: 'rc'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: rc"
+                sed -i "s|NAMESPACE_TAG|rc|g"           $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|rc|g"           $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|rc|g"           $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|rc|g"           $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|RC|g"                 $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"  $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"      $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (rc)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace rc..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n rc
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n rc --timeout=300s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test RC'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n rc \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test RC: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ RC OK" || exit 1
+
+# ── STABLE ────────────────────────────────────────────────────
+- stage: DeployStable
+  displayName: 'Stable — Produção (aprovação dupla)'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      startsWith(variables['Build.SourceBranch'], 'refs/tags/v'),
+      not(contains(variables['Build.SourceBranch'], '-alpha.')),
+      not(contains(variables['Build.SourceBranch'], '-beta.')),
+      not(contains(variables['Build.SourceBranch'], '-rc.'))
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployStable
+    displayName: 'Deploy Stable → AKS namespace: stable'
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: stable"
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Stable|g"             $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"  $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"      $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (stable)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace stable..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n stable
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n stable --timeout=180s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Stable'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n stable \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Stable: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Stable — produção no ar!" || exit 1
+
+          - script: |
+              echo "================================================"
+              echo " Deploy em produção concluído!"
+              echo " Versão : $(appVersion)"
+              echo " Imagem : $(DOCKERHUB_REPO):$(appVersion)"
+              echo " Cluster: $(AKS_CLUSTER)"
+              echo " NS     : stable"
+              echo "================================================"
+            displayName: '5. Resumo do deploy'

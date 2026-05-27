@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidosapi-svc
+  namespace: NAMESPACE_TAG    # ← placeholder alpha | beta | rc | stable
+  labels:
+    app: pedidosapi
+spec:
+  type: LoadBalancer
+  selector:
+    app: pedidosapi
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 8080

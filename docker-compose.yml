@@ -1,0 +1,43 @@
+# ============================================================
+#  PedidosApi — Docker Compose base (local / Development)
+#
+#  A connection string abaixo é apenas ilustrativa.
+#  Em produção, o Azure Web App Container injeta a variável
+#  via Configuração → Cadeias de conexão (tipo SQLServer):
+#    Nome  : DefaultConnection
+#    Valor : Server=tcp:<servidor>.database.windows.net,...
+#  O Azure traduz isso para SQLCONNSTR_DefaultConnection,
+#  que o ASP.NET Core lê automaticamente.
+#
+#  Uso:
+#    cp .env.example .env
+#    docker compose up --build
+#
+#  O docker-compose.override.yml é carregado automaticamente
+#  e seus valores sobrepõem este arquivo (gitignored).
+# ============================================================
+
+services:
+
+  pedidos-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pedidosapi:local
+    container_name: pedidos-api-dev
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+
+      # Connection string ilustrativa — demonstra como o Azure Web App
+      # Container injeta credenciais via variável de ambiente,
+      # sem precisar alterar o appsettings.json.
+      - ConnectionStrings__DefaultConnection=Server=tcp:pedidos-sql-dev.database.windows.net,1433;Initial Catalog=pedidos-db-dev;User ID=pedidos-user;Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+
+      # Feature flags ativas para desenvolvimento local
+      - FeatureManagement__DescontoPremium=true
+      - FeatureManagement__DescontoProgressivo=true
+      - FeatureManagement__NovoCalculoFrete=true
+    ports:
+      - "5010:8080"
+    restart: unless-stopped
