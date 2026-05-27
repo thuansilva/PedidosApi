@@ -4,7 +4,9 @@
       "Bash(dotnet new xunit *)",
       "Bash(dotnet add *)",
       "Bash(dotnet test *)",
-      "Bash(dotnet build *)"
+      "Bash(dotnet build *)",
+      "WebSearch",
+      "mcp__claude_ai_Google_Drive__create_file"
     ]
   }
 }

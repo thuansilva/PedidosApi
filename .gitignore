@@ -91,6 +91,8 @@ build/
 # Docker
 # =========================
 docker-compose.override.yml
+Docker/.env
+!Docker/.env.example
 
 # =========================
 # Coverage / Tools

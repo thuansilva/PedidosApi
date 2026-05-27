@@ -1,0 +1,124 @@
+# ============================================================
+#  PedidosApi — Blue-Green Deployment (Docker Hub)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidosapi-blue
+  namespace: stable
+  labels:
+    app: pedidosapi
+    version: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pedidosapi
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: pedidosapi
+        version: blue
+    spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
+      containers:
+      - name: pedidosapi
+        image: maqbrdevops/pedidosapi:1.0.9
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: pedidosapi-config
+        - secretRef:
+            name: pedidosapi-secret
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidosapi-green
+  namespace: stable
+  labels:
+    app: pedidosapi
+    version: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pedidosapi
+      version: green
+  template:
+    metadata:
+      labels:
+        app: pedidosapi
+        version: green
+    spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
+      containers:
+      - name: pedidosapi
+        image: maqbrdevops/pedidosapi:1.1.0
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: pedidosapi-config
+        - secretRef:
+            name: pedidosapi-secret
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidosapi-svc
+  namespace: stable
+  labels:
+    app: pedidosapi
+spec:
+  type: LoadBalancer
+  selector:
+    app: pedidosapi
+    version: blue
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidosapi-green-svc
+  namespace: stable
+spec:
+  type: ClusterIP
+  selector:
+    app: pedidosapi
+    version: green
+  ports:
+  - port: 80
+    targetPort: 8080

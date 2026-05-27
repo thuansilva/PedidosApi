@@ -1,0 +1,309 @@
+# ============================================================
+#  PedidosApi — Pipeline CI/CD com Docker + Docker Hub + Web App Container
+#  Alpha → Beta → RC → Stable
+#
+#  CI  : dotnet publish ocorre DENTRO do Docker (build multi-stage)
+#         com version via --build-arg; imagem enviada ao Docker Hub
+#  CD  : AzureWebAppContainer@1
+#         ASPNETCORE_ENVIRONMENT definido como App Setting no deploy
+#
+#  Triggers por tag SemVer:
+#    v*.*.*-alpha.*  → CI + Deploy Alpha
+#    v*.*.*-beta.*   → CI + Deploy Beta
+#    v*.*.*-rc.*     → CI + Deploy RC  (aprovação: Tech Lead)
+#    v*.*.*          → CI + Deploy Stable (aprovação: Tech Lead + PM)
+#
+#  Pré-requisitos no Azure DevOps:
+#    Service connections:
+#      sc-dockerhub-pedidosapi → Docker Hub (tipo Docker Registry)
+#      sc-azure-pedidosapi     → Azure Resource Manager (para Web App)
+#    Environments:
+#      alpha, beta, rc, stable
+#    Docker Hub:
+#      Repositório: maqbrdevops/pedidosapi
+#      Web App Container: configurar para pull do Docker Hub
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - 'feat/*'
+      - 'fix/*'
+  tags:
+    include:
+      - 'v*.*.*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion:      '10.x'
+  DOCKERHUB_REPO:     'maqbrdevops/pedidosapi'
+  APP_NAME_ALPHA:     'pedidos-api-curso-devops-alpha'
+  APP_NAME_BETA:      'pedidos-api-curso-devops-beta'
+  APP_NAME_RC:        'pedidos-api-curso-devops-rc'
+  APP_NAME_STABLE:    'pedidos-api-curso-devops'
+
+stages:
+
+# ── CI ────────────────────────────────────────────────────────
+- stage: CI
+  displayName: 'CI — Build, Test e Push Docker Hub'
+  jobs:
+  - job: BuildTestPush
+    displayName: 'Build, Test e Push para Docker Hub'
+    steps:
+
+    - checkout: self
+      fetchDepth: 0
+
+    - task: UseDotNet@2
+      displayName: '1. Instalar .NET SDK $(dotnetVersion)'
+      inputs:
+        version: '$(dotnetVersion)'
+        includePreviewVersions: true
+
+    - script: |
+        BRANCH="$(Build.SourceBranch)"
+        if [[ "$BRANCH" == refs/tags/v* ]]; then
+          VERSION="${BRANCH#refs/tags/v}"
+          ASSEMBLY_VERSION=$(echo "$VERSION" | cut -d'-' -f1)
+        else
+          VERSION="0.0.0-$(Build.BuildNumber)"
+          ASSEMBLY_VERSION="0.0.0"
+        fi
+
+        if [[ "$BRANCH" == refs/heads/main ]] || [[ "$VERSION" == *-alpha.* ]]; then
+          ENV_TAG="alpha"
+        elif [[ "$VERSION" == *-beta.* ]]; then
+          ENV_TAG="beta"
+        elif [[ "$VERSION" == *-rc.* ]]; then
+          ENV_TAG="rc"
+        else
+          ENV_TAG="stable"
+        fi
+
+        # isOutput=true → disponível nos stages de deploy via stageDependencies
+        echo "##vso[task.setvariable variable=appVersion;isOutput=true]$VERSION"
+        echo "##vso[task.setvariable variable=assemblyVersion]$ASSEMBLY_VERSION"
+        echo "##vso[task.setvariable variable=envTag;isOutput=true]$ENV_TAG"
+        echo "Versão: $VERSION | Assembly: $ASSEMBLY_VERSION | Tag: $ENV_TAG"
+      name: versao
+      displayName: '2. Calcular versão SemVer e tag de ambiente'
+
+    - task: DotNetCoreCLI@2
+      displayName: '3. Restaurar pacotes NuGet'
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: '4. Build'
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-restore
+          -p:Version=$(assemblyVersion)
+          -p:AssemblyVersion=$(assemblyVersion)
+          -p:FileVersion=$(assemblyVersion)
+          -p:InformationalVersion=$(versao.appVersion)
+          -p:IncludeSourceRevisionInInformationalVersion=false
+
+    - task: DotNetCoreCLI@2
+      displayName: '5. Testes unitários com cobertura'
+      inputs:
+        command: test
+        projects: '**/*Tests*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-build
+          --collect:"XPlat Code Coverage"
+        publishTestResults: true
+
+    # Docker@2 com buildAndPush:
+    #   1. Autentica no Docker Hub via service connection (sc-dockerhub-pedidosapi)
+    #   2. Executa docker build com os --build-arg de versão
+    #      (dotnet publish ocorre DENTRO do estágio build do Dockerfile)
+    #   3. Gera duas tags: versão exata + tag de ambiente
+    #   4. Faz push das duas tags para o Docker Hub
+    - task: Docker@2
+      displayName: '6. Build e Push da imagem para o Docker Hub'
+      inputs:
+        command: buildAndPush
+        containerRegistry: 'sc-dockerhub-pedidosapi'
+        repository: '$(DOCKERHUB_REPO)'
+        dockerfile: 'Dockerfile'
+        buildContext: '.'
+        tags: |
+          $(versao.appVersion)
+          $(versao.envTag)
+        arguments: >
+          --build-arg VERSION=$(versao.appVersion)
+          --build-arg ASSEMBLY_VERSION=$(assemblyVersion)
+
+# ── ALPHA ─────────────────────────────────────────────────────
+- stage: DeployAlpha
+  displayName: 'Alpha — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      or(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        contains(variables['Build.SourceBranch'], '-alpha.')
+      )
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployAlpha
+    displayName: 'Deploy Alpha'
+    environment: 'alpha'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          # AzureWebAppContainer@1:
+          #   - Configura o Web App para usar a imagem do Docker Hub
+          #   - Define ASPNETCORE_ENVIRONMENT como App Setting
+          #   - O appsettings.Alpha.json (baked na imagem) é carregado
+          #     automaticamente pelo ASP.NET Core com base no Environment
+          - task: AzureWebAppContainer@1
+            displayName: '1. Deploy Web App Container Alpha'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              appName: '$(APP_NAME_ALPHA)'
+              containers: '$(DOCKERHUB_REPO):$(appVersion)'
+              appSettings: -ASPNETCORE_ENVIRONMENT Alpha
+
+          - script: |
+              sleep 20
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                https://$(APP_NAME_ALPHA)-hbdpfdc7dhgmbscv.canadacentral-01.azurewebsites.net/info)
+              echo "Smoke test Alpha: $STATUS"
+              [ "$STATUS" = "200" ] && echo "OK" || exit 1
+            displayName: '2. Smoke test Alpha'
+
+# ── BETA ──────────────────────────────────────────────────────
+- stage: DeployBeta
+  displayName: 'Beta — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      contains(variables['Build.SourceBranch'], '-beta.')
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployBeta
+    displayName: 'Deploy Beta'
+    environment: 'beta'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: '1. Deploy Web App Container Beta'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              appName: '$(APP_NAME_BETA)'
+              containers: '$(DOCKERHUB_REPO):$(appVersion)'
+              appSettings: -ASPNETCORE_ENVIRONMENT Beta
+
+          - script: |
+              sleep 20
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                https://$(APP_NAME_BETA)-bbbgc9e8bsfafzf7.canadacentral-01.azurewebsites.net/info)
+              echo "Smoke test Beta: $STATUS"
+              [ "$STATUS" = "200" ] && echo "OK" || exit 1
+            displayName: '2. Smoke test Beta'
+
+# ── RC ────────────────────────────────────────────────────────
+- stage: DeployRC
+  displayName: 'RC — Aprovação obrigatória'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      contains(variables['Build.SourceBranch'], '-rc.')
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployRC
+    displayName: 'Deploy RC'
+    environment: 'rc'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: '1. Deploy Web App Container RC'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              appName: '$(APP_NAME_RC)'
+              containers: '$(DOCKERHUB_REPO):$(appVersion)'
+              appSettings: -ASPNETCORE_ENVIRONMENT RC
+
+          - script: |
+              sleep 20
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                https://$(APP_NAME_RC)-a3gqd4ctgpbmb7gf.canadacentral-01.azurewebsites.net/info)
+              echo "Smoke test RC: $STATUS"
+              [ "$STATUS" = "200" ] && echo "OK" || exit 1
+            displayName: '2. Smoke test RC'
+
+# ── STABLE ────────────────────────────────────────────────────
+- stage: DeployStable
+  displayName: 'Stable — Produção (aprovação dupla)'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      startsWith(variables['Build.SourceBranch'], 'refs/tags/v'),
+      not(contains(variables['Build.SourceBranch'], '-alpha.')),
+      not(contains(variables['Build.SourceBranch'], '-beta.')),
+      not(contains(variables['Build.SourceBranch'], '-rc.'))
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployStable
+    displayName: 'Deploy Stable'
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: '1. Deploy Web App Container Stable'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              appName: '$(APP_NAME_STABLE)'
+              containers: '$(DOCKERHUB_REPO):$(appVersion)'
+              appSettings: -ASPNETCORE_ENVIRONMENT Stable
+
+          - script: |
+              sleep 25
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.canadacentral-01.azurewebsites.net/info)
+              echo "Smoke test Stable: $STATUS"
+              [ "$STATUS" = "200" ] && echo "OK — produção no ar!" || exit 1
+            displayName: '2. Smoke test Stable'
+
+          - script: |
+              echo "================================================"
+              echo " Deploy em produção concluído!"
+              echo " Versão : $(appVersion)"
+              echo " Imagem : $(DOCKERHUB_REPO):$(appVersion)"
+              echo " URL    : https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.canadacentral-01.azurewebsites.net"
+              echo "================================================"
+            displayName: '3. Resumo do deploy'
